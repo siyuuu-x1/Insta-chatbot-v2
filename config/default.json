@@ -1,14 +1,14 @@
 {
   "instagramAccount": {
     "proxy": null,
-    "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "intervalGetNewCookie": null,
-    "notes": "Email/Password bad deya hoyeche, tai auto-cookie refresh ekhon 'null' thakbe."
+    "notes": "User-Agent update kora hoyeche MQTT connection thik korar jonno."
   },
   "antiInbox": false,
   "language": "en",
-  "nickNameBot": "maiko[/]",
-  "prefix": "/",
+  "nickNameBot": "গেসুকে 😈",
+  "prefix": "!",
   "noPrefix": true,
   "adminOnly": {
     "enable": false,
@@ -75,11 +75,12 @@
     "selfListenEvent": true,
     "listenEvents": true,
     "listenTyping": true,
-    "updatePresence": false,
+    "updatePresence": true,
     "autoMarkRead": true,
     "autoReconnect": true,
     "forceLogin": true,
     "simulateTyping": true,
-    "stealthMode": true
+    "stealthMode": false,
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
   }
 }
