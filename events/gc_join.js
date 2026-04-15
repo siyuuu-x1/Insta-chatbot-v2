@@ -1,5 +1,7 @@
 const logger = require('../utils/logger');
 const config = require('../config');
+//created by - siyuuuuuuu
+//dont change my credit 
 
 module.exports = {
   config: {
@@ -12,7 +14,7 @@ module.exports = {
       if (!config.LOG_EVENTS.event && !config.LOG_EVENTS.disableAll === false) return;
 
       const { api } = bot;
-      const { threadID, addedParticipants, addedBy } = data;
+      const { threadID, addedParticipants } = data;
 
       if (!addedParticipants || addedParticipants.length === 0) return;
 
@@ -23,8 +25,11 @@ module.exports = {
         logger.info(`New member joined thread ${threadID}: ${fullName} (${userId})`);
 
         const message =
-          `👋 Welcome to the group, ${fullName}!\n\n` +
-          `We're happy to have you here. Type ${config.PREFIX}help to see what I can do.`;
+          `🚀 System Alert!\n\n` +
+          `New User Detected: ${fullName} 🧑‍💻\n` +
+          `Status: Successfully Joined ✅\n\n` +
+          `📊 Access Granted to Commands\n` +
+          `👉 Type ${config.PREFIX}help to begin`;
 
         await api.sendMessage(message, threadID);
       }
