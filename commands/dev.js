@@ -5,7 +5,7 @@ module.exports = {
     description: 'Developer panel - Bot developer only',
     usage: 'dev',
     cooldown: 0,
-    role: 3,
+    role: 4,
     author: 'NeoKEX',
     category: 'system'
   },
@@ -21,9 +21,7 @@ module.exports = {
       const heapUsed = Math.round(memoryUsage.heapUsed / 1024 / 1024);
       const heapTotal = Math.round(memoryUsage.heapTotal / 1024 / 1024);
       
-      let devText = `╔═══════════════════════════════════╗\n`;
-      devText += `║    DEVELOPER CONTROL PANEL        ║\n`;
-      devText += `╚═══════════════════════════════════╝\n\n`;
+      let devText = `Developer Panel\n\n`;
       devText += `🔧 System Information:\n`;
       devText += `  • Node.js: ${process.version}\n`;
       devText += `  • Platform: ${process.platform}\n`;

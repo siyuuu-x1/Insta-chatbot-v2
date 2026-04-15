@@ -23,9 +23,7 @@ module.exports = {
       const memoryUsage = process.memoryUsage();
       const memoryMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
       
-      let infoText = `╔═══════════════════════════════╗\n`;
-      infoText += `║   ${config.BOT_NAME}   ║\n`;
-      infoText += `╚═══════════════════════════════╝\n\n`;
+      let infoText = `${config.BOT_NAME}\n\n`;
       infoText += `📦 Version: ${config.BOT_VERSION}\n`;
       infoText += `👤 Author: ${config.AUTHOR}\n`;
       infoText += `🔗 GitHub: ${config.GITHUB}\n`;
@@ -35,8 +33,7 @@ module.exports = {
       infoText += `💾 Memory: ${memoryMB}MB\n`;
       infoText += `🟢 Node.js: ${process.version}\n`;
       infoText += `💻 Platform: ${process.platform}\n`;
-      infoText += `\n✅ Status: Fully Operational\n\n`;
-      infoText += `⚠️ WARNING: Removing credits is prohibited!`;
+      infoText += `\n✅ Status: Fully Operational`;
       
       return api.sendMessage(infoText, event.threadId);
     } catch (error) {

@@ -12,51 +12,22 @@ module.exports = {
 
   async run({ api, event, logger, config }) {
     try {
-      let creditsText = `
-╔═══════════════════════════════════════════════╗
-║                                               ║
-║        ${config.BOT_NAME}                       
-║                                               ║
-╚═══════════════════════════════════════════════╝
+      const creditsText =
+`InstaBOT v${config.BOT_VERSION}
 
-👤 Created by: ${config.AUTHOR}
-📦 Version: ${config.BOT_VERSION}
-🔗 GitHub: ${config.GITHUB}
+Created by NeoKEX
+GitHub: github.com/NeoKEX
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+InstaBOT is a powerful, modular Instagram bot built for automation and fun. Fully open-source and crafted with care.
 
-💖 Special Thanks:
-  • All supporters and contributors
-  • Open source community
-  • Instagram Bot developers
+Like this bot? Star it on GitHub!
+Found a bug? Open an issue on GitHub.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Credits must not be removed or modified.`;
 
-⚠️  COPYRIGHT NOTICE ⚠️
-
-This bot was created by ${config.AUTHOR}.
-Removing or modifying credits is strictly prohibited!
-
-🚫 Violations will result in:
-  ✗ Immediate ban from support
-  ✗ Loss of future updates
-  ✗ Public exposure of violation
-  ✗ Possible legal action
-
-✅ Please respect the creator's work!
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🌟 Like this bot? Star it on GitHub!
-🐛 Found a bug? Report it on GitHub Issues
-💡 Have suggestions? Open a GitHub Discussion
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`;
-      
       return api.sendMessage(creditsText, event.threadId);
     } catch (error) {
-      logger.error('Error in credits command', { error: error.message, stack: error.stack });
+      logger.error('Error in credits command', { error: error.message });
       return api.sendMessage('Error displaying credits.', event.threadId);
     }
   }

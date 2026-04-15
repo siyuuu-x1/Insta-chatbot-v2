@@ -5,7 +5,7 @@ module.exports = {
     description: 'Admin panel - Manage bot administrators',
     usage: 'admin [add|remove|list] [user_id]',
     cooldown: 5,
-    role: 1,
+    role: 2,
     author: 'NeoKEX',
     category: 'admin'
   },
@@ -78,9 +78,7 @@ module.exports = {
     const admins = ConfigManager.getAdmins();
     const developer = ConfigManager.getDeveloper();
 
-    let adminText = `╔════════════════════════════╗\n`;
-    adminText += `║     ADMIN PANEL            ║\n`;
-    adminText += `╚════════════════════════════╝\n\n`;
+    let adminText = `Admin Panel\n\n`;
     adminText += `👤 Your Role: ${roleName}\n`;
     adminText += `🔢 Role Level: ${senderRole}\n\n`;
     
@@ -94,10 +92,11 @@ module.exports = {
     adminText += `  • Message Delivery: Instant (No Queue)\n\n`;
     
     adminText += `🔐 Role System:\n`;
-    adminText += `  0 - All Users\n`;
-    adminText += `  1 - Bot Admins\n`;
-    adminText += `  2 - Group Admins\n`;
-    adminText += `  3 - Bot Developer\n\n`;
+    adminText += `  0 - Normal Users\n`;
+    adminText += `  1 - Group Admins\n`;
+    adminText += `  2 - Bot Admins\n`;
+    adminText += `  3 - Premium Users\n`;
+    adminText += `  4 - Bot Developer\n\n`;
     
     adminText += `⚙️ Configuration:\n`;
     adminText += `  • Prefix: ${config.PREFIX}\n`;
@@ -154,9 +153,6 @@ module.exports = {
       return api.sendMessage('❌ Invalid User ID format. Please provide a numeric User ID.', event.threadId);
     }
 
-    // Get user info to verify user exists
-    await api.sendMessage(`🔍 Verifying user ${userIdToAdd}...`, event.threadId);
-
     try {
       const userInfo = await bot.ig.getUserInfo(userIdToAdd);
       
@@ -165,7 +161,7 @@ module.exports = {
       }
 
       const username = userInfo.username || 'Unknown';
-      const fullName = userInfo.full_name || 'N/A';
+      const fullName = userInfo.fullName || 'N/A';
 
       // Add admin to config
       const success = ConfigManager.addAdmin(userIdToAdd);

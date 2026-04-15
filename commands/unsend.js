@@ -47,30 +47,10 @@ module.exports = {
       // Try to unsend the message
       try {
         await api.unsendMessage(event.threadId, messageIdToUnsend);
-        
         logger.info(`Message unsent: ${messageIdToUnsend} in thread ${event.threadId}`);
-        
-        return api.sendMessage('✅ Message unsent successfully!', event.threadId);
       } catch (unsendError) {
         logger.error(`Failed to unsend message: ${unsendError.message}`);
-        
-        // Check for common error cases
-        if (unsendError.message.includes('not found') || unsendError.message.includes('404')) {
-          return api.sendMessage(
-            '❌ Message not found! It may have already been deleted.',
-            event.threadId
-          );
-        } else if (unsendError.message.includes('permission') || unsendError.message.includes('403')) {
-          return api.sendMessage(
-            '❌ Cannot unsend this message! You can only unsend messages sent by the bot.',
-            event.threadId
-          );
-        } else {
-          return api.sendMessage(
-            `❌ Failed to unsend message: ${unsendError.message}`,
-            event.threadId
-          );
-        }
+        return api.sendMessage('❌ Failed to unsend message.', event.threadId);
       }
     } catch (error) {
       logger.error(`Error in unsend command: ${error.message}`);

@@ -35,8 +35,6 @@ module.exports = {
         );
       }
 
-      await api.sendMessage('🤖 Thinking...', event.threadId);
-
       try {
         const response = await axios.post(
           'https://api.openai.com/v1/chat/completions',

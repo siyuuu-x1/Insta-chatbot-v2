@@ -33,7 +33,7 @@ module.exports = {
       const lastSeen = user.lastSeen ? new Date(user.lastSeen).toLocaleDateString() : 'Unknown';
       
       let message = `📊 Statistics\n\n`;
-      message += `═══ YOUR STATS ═══\n`;
+      message += `Your Stats\n`;
       message += `👤 User ID: ${userId}\n`;
       message += `📨 Messages: ${user.messageCount || 0}\n`;
       message += `⚡ Commands: ${user.commandCount || 0}\n`;
@@ -41,7 +41,7 @@ module.exports = {
       message += `📅 First seen: ${firstSeen}\n`;
       message += `🕐 Last active: ${lastSeen}\n\n`;
       
-      message += `═══ BOT STATS ═══\n`;
+      message += `\nBot Stats\n`;
       message += `👥 Total users: ${totalUsers}\n`;
       message += `💬 Total messages: ${totalMessages}\n`;
       message += `⚡ Total commands: ${totalCommands}\n`;
