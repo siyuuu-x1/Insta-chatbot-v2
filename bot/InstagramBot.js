@@ -1,80 +1,66 @@
 'use strict';
 
-/*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚀 Instagram Bot Core System
-💀 Modified by siyuuu
-🍪 Cookie Login Only • Ultra Stable • Advanced System
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*/
+/**
+ * @Project: Powerful Instagram Messenger Bot
+ * @Author & edited:- by siyuuu
+ * @Description: Enhanced FCA-based bot with dedicated cookie login and advanced event handling.
+ */
 
 const { login } = require('@neoaz07/nkxica');
-
-const fs    = require('fs');
-const http  = require('http');
-const cron  = require('node-cron');
+const fs = require('fs');
+const http = require('http');
+const cron = require('node-cron');
 const axios = require('axios');
-
-const config        = require('../config');
-const logger        = require('../utils/logger');
+const config = require('../config');
+const logger = require('../utils/logger');
 const CommandLoader = require('../utils/commandLoader');
-const EventLoader   = require('../utils/eventLoader');
-const Banner        = require('../utils/banner');
+const EventLoader = require('../utils/eventLoader');
+const Banner = require('../utils/banner');
 
 class InstagramBot {
-
   constructor() {
     this.ig = null;
     this.api = null;
     this.userID = null;
     this.username = null;
-
     this.commandLoader = new CommandLoader();
-    this.eventLoader   = new EventLoader(this);
-
+    this.eventLoader = new EventLoader(this);
     this.reconnectAttempts = 0;
-    this.shouldReconnect   = true;
-    this.isRunning         = false;
+    this.shouldReconnect = config.AUTO_RECONNECT;
+    this.isRunning = false;
+    this.credits = "siyuuu"; // Credit set to siyuuu
 
-    this._healthServer = null;
-    this._uptimeTimer  = null;
-    this._memoryTimer  = null;
+    // Timers
+    this._mqttRestartTimer = null;
+    this._uptimeTimer = null;
+    this._reminderTimer = null;
+    this._threadInfoCache = new Map();
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🌐 HEALTH SERVER
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  // ── Health Server ─────────────────────────────────────────────────────
   startHealthServer() {
-    const port = parseInt(process.env.PORT || config.DASHBOARD_PORT || 3000);
-
-    this._healthServer = http.createServer((req, res) => {
+    const port = parseInt(process.env.PORT || config.DASHBOARD_PORT || 3000, 10);
+    const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-
       res.end(JSON.stringify({
-        status: 'online',
-        bot: config.BOT_NAME || 'Siyuuu Bot',
-        uptime: Math.floor(process.uptime()),
-        memory: process.memoryUsage().rss,
-        reconnectAttempts: this.reconnectAttempts
+        status: 'active',
+        developer: this.credits,
+        bot: config.BOT_NAME,
+        version: config.BOT_VERSION,
+        uptime: Math.floor(process.uptime()) + "s"
       }));
     });
-
-    this._healthServer.listen(port, '0.0.0.0', () => {
-      logger.info(`🌐 Server running on port ${port}`);
+    server.listen(port, '0.0.0.0', () => {
+      logger.info(`[ ${this.credits} ] Health server is live on port ${port}`);
     });
+    return server;
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🚀 START SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  // ── Boot Process ──────────────────────────────────────────────────────
   async start() {
     try {
-      Banner.display();
-      logger.info('🚀 Starting Bot...');
+      Banner.display(); // Banner should show siyuuu's credit
+      logger.info(`[ ${this.credits} ] Initializing Powerful Instagram Engine...`);
 
       this.startHealthServer();
 
@@ -85,244 +71,219 @@ class InstagramBot {
       await this.eventLoader.loadEvents();
       this.eventLoader.registerEvents();
 
-      login.setOptions(config.OPTIONS_FCA || {});
+      // Setup FCA Options
+      login.setOptions({
+        ...config.OPTIONS_FCA,
+        forceLogin: true,
+        listenEvents: true,
+        selfListen: config.SELF_LISTEN || false
+      });
 
       await this.loadAndLogin();
 
-      this._startAutoUptime();
-      this._startMemoryLogger();
-
-    } catch (err) {
-      logger.error('❌ Start Error', { error: err.message });
-      this.scheduleReconnect();
+      this._scheduleAutoRestart();
+      this._scheduleAutoUptime();
+    } catch (error) {
+      logger.error(`[ ${this.credits} ] Critical Start Error`, { error: error.message });
+      if (this.shouldReconnect && this.reconnectAttempts < config.MAX_RECONNECT_ATTEMPTS) {
+        this.scheduleReconnect();
+      } else {
+        process.exit(1);
+      }
     }
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🍪 COOKIE LOGIN ONLY SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  // ── Specialized Cookie Login ──────────────────────────────────────────
   async loadAndLogin() {
+    if (!fs.existsSync(config.ACCOUNT_FILE)) {
+      throw new Error(`[ ${this.credits} ] account.txt file not found! Please provide Instagram cookies.`);
+    }
+
+    const cookieContent = fs.readFileSync(config.ACCOUNT_FILE, 'utf-8');
+    
+    if (!this._hasValidCookies(cookieContent)) {
+      throw new Error(`[ ${this.credits} ] Invalid cookies in account.txt. Please refresh your session.`);
+    }
+
+    logger.info(`[ ${this.credits} ] Attempting secure login via session cookies...`);
+    
     try {
-      if (!fs.existsSync(config.ACCOUNT_FILE)) {
-        throw new Error('❌ account.txt not found (cookie required)');
-      }
-
-      const cookie = fs.readFileSync(config.ACCOUNT_FILE, 'utf-8');
-
-      if (!cookie || !cookie.includes('sessionid')) {
-        throw new Error('❌ Invalid cookie (sessionid missing)');
-      }
-
-      logger.info('🍪 Logging in using cookies...');
-      this.ig = await login(cookie);
-
-      this.afterLogin();
-
+      this.ig = await login(cookieContent);
+      this._afterLogin();
     } catch (err) {
-      logger.error('🔥 Cookie Login Failed', { error: err.message });
-      this.scheduleReconnect();
+      logger.error(`[ ${this.credits} ] Login Failed. Check if cookies are expired.`);
+      throw err;
     }
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✅ AFTER LOGIN
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  afterLogin() {
+  _hasValidCookies(content) {
+    return content.includes('sessionid') || content.includes('ds_user_id');
+  }
+
+  _afterLogin() {
     try {
-      const id = this.ig.getCurrentUserID();
-      this.userID = typeof id === 'object'
-        ? (id.userID || id.userId || String(id))
-        : String(id);
-    } catch {
+      const idResult = this.ig.getCurrentUserID();
+      this.userID = String(idResult.userID || idResult || 'unknown');
+    } catch (e) {
       this.userID = 'unknown';
     }
 
     this.api = this.createAPIWrapper();
     this.isRunning = true;
-
-    logger.info(`✅ Logged in as ${this.userID}`);
+    logger.info(`[ ${this.credits} ] Successfully linked to Instagram. ID: ${this.userID}`);
 
     this.eventLoader.handleEvent('ready', {}).then(() => {
       this.startListening();
+      this._startReminderScheduler();
     });
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  👂 LISTENER SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  // ── Advanced Listener ─────────────────────────────────────────────────
   startListening() {
-    logger.info('👂 Listening...');
+    logger.info(`[ ${this.credits} ] Listener service started...`);
 
     this.ig.listen((err, event) => {
       if (err) {
-        logger.error('⚠️ Listen Error', { error: err.message });
-        return this.scheduleReconnect();
+        logger.error(`[ ${this.credits} ] Listen stream error`, { error: err.message });
+        if (this.shouldReconnect) this.scheduleReconnect();
+        return;
       }
 
       if (!event) return;
 
-      if (event.type === 'message') {
-        this.handleMessage(event);
-
-      } else if (event.type === 'event') {
-        this.handleThreadEvent(event);
-
-      } else if (event.type === 'message_reaction') {
-        this.handleReaction(event);
+      // Anti-Unsend & Message Detection logic
+      switch (event.type) {
+        case 'message':
+          this.handleMessage(event);
+          break;
+        case 'event':
+          this.handleThreadEvent(event);
+          break;
+        case 'message_reaction':
+          this.handleReactionEvent(event);
+          break;
+        case 'message_unsend':
+          // Power feature: Detect when someone unsends a message
+          this.eventLoader.handleEvent('message_unsend', event);
+          break;
       }
     });
-  }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  💬 MESSAGE HANDLER
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  async handleMessage(event) {
-    try {
-      await this.eventLoader.handleEvent('message', event);
-    } catch (err) {
-      logger.error('Message Error', { error: err.message });
+    if (config.RESTART_LISTEN_MQTT?.enable) {
+      this._scheduleMqttRestart();
     }
+
+    this.keepAlive();
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  👥 GROUP EVENTS
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  async handleThreadEvent(event) {
-    try {
-      const threadID = event.threadID;
-      const type = event.logMessageType || '';
-
-      if (type === 'log:subscribe') {
-        await this.eventLoader.handleEvent('gc_join', {
-          threadID,
-          addedParticipants: event.logMessageData?.addedParticipants || [],
-          addedBy: event.author || ''
-        });
-
-      } else if (type === 'log:unsubscribe') {
-        await this.eventLoader.handleEvent('gc_leave', {
-          threadID,
-          leftUserId: event.logMessageData?.leftParticipantFbId || ''
-        });
-      }
-
-    } catch (err) {
-      logger.error('Thread Error', { error: err.message });
-    }
-  }
-
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ❤️ REACTION SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  async handleReaction(event) {
-    try {
-      await this.eventLoader.handleEvent('message_reaction', event);
-    } catch (err) {
-      logger.error('Reaction Error', { error: err.message });
-    }
-  }
-
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔌 API WRAPPER
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  // ── Power API Wrapper ─────────────────────────────────────────────────
   createAPIWrapper() {
     const ig = this.ig;
+    const dev = this.credits;
 
     return {
-
-      sendMessage: async (msg, threadID) => {
+      sendMessage: async (text, threadID) => {
         try {
-          return await ig.sendMessage(msg, threadID);
-        } catch (err) {
-          logger.error('Send Error', { error: err.message });
+          if (config.TYPING_INDICATOR) {
+            await ig.sendTypingIndicator(threadID);
+            await this._sleep(1500); 
+          }
+          const result = await ig.sendMessage(text, threadID);
+          return result;
+        } catch (error) {
+          logger.error(`[ ${dev} ] Send Error`, { threadID, error: error.message });
+          throw error;
         }
       },
 
-      getUserInfo: async (uid) => {
+      // Extended capability: Get User details easily
+      getUserDetails: async (id) => {
         try {
-          return await ig.getUserInfo(uid);
-        } catch (err) {
-          logger.error('User Info Error', { error: err.message });
+          return await ig.getUserInfo(id);
+        } catch (e) {
+          return null;
         }
       },
 
-      sendReaction: async (reaction, messageID) => {
+      // Powerful Multi-media sender
+      sendAttachment: async (type, pathOrUrl, threadID) => {
+        const methodMap = {
+          'photo': ig.sendPhoto,
+          'video': ig.sendVideo,
+          'audio': ig.sendVoice
+        };
         try {
-          return await ig.sendReaction(reaction, messageID);
-        } catch {}
-      }
+          return await methodMap[type](threadID, pathOrUrl);
+        } catch (e) {
+          logger.error(`[ ${dev} ] Media upload failed`, { type });
+        }
+      },
+
+      // Forward message functionality
+      forwardMessage: async (messageID, targetThreadID) => {
+         // Logic for forwarding can be added here depending on FCA support
+         logger.info(`[ ${dev} ] Forwarding message: ${messageID}`);
+      },
+
+      ...ig // Spread original ig functions to ensure nothing is deleted
     };
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🌍 AUTO UPTIME SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  _startAutoUptime() {
+  // ── Systems & Schedulers ──────────────────────────────────────────────
+  _scheduleAutoUptime() {
     if (!config.AUTO_UPTIME_ENABLE) return;
-
-    const url = config.AUTO_UPTIME_URL;
+    const url = config.AUTO_UPTIME_URL || process.env.REPLIT_DEV_DOMAIN;
     if (!url) return;
 
-    this._uptimeTimer = setInterval(() => {
+    logger.info(`[ ${this.credits} ] Anti-Sleep Active: Ping to ${url}`);
+    setInterval(() => {
       axios.get(url).catch(() => {});
-    }, config.AUTO_UPTIME_INTERVAL * 1000);
-
-    logger.info('🌍 Auto uptime started');
+    }, (config.AUTO_UPTIME_INTERVAL || 60) * 1000);
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📊 MEMORY LOGGER (NEW SYSTEM)
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
-  _startMemoryLogger() {
-    this._memoryTimer = setInterval(() => {
-      const mem = process.memoryUsage().rss / 1024 / 1024;
-      logger.info(`📊 RAM Usage: ${mem.toFixed(2)} MB`);
-    }, 60000);
+  _scheduleAutoRestart() {
+    const time = config.AUTO_RESTART_TIME;
+    if (!time) return;
+
+    cron.schedule(time, () => {
+      logger.info(`[ ${this.credits} ] Scheduled Restart Triggered.`);
+      process.exit(0);
+    }, { timezone: config.TIMEZONE || "Asia/Dhaka" });
   }
 
-  /*
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔄 RECONNECT SYSTEM
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  */
+  _startReminderScheduler() {
+    setInterval(async () => {
+      try {
+        const db = require('../utils/database');
+        const due = db.getDueReminders?.() || [];
+        for (const r of due) {
+          await this.api.sendMessage(`⏰ [RECALL]: ${r.message}`, r.threadID);
+        }
+      } catch (e) {}
+    }, 40000);
+  }
+
+  // ── Utility ───────────────────────────────────────────────────────────
   scheduleReconnect() {
     this.reconnectAttempts++;
-
-    if (this.reconnectAttempts > 15) {
-      logger.error('❌ Max reconnect reached. Exiting...');
-      process.exit(1);
-    }
-
-    logger.info(`🔄 Reconnecting (${this.reconnectAttempts})...`);
-
-    setTimeout(() => {
-      this.loadAndLogin();
-    }, 5000);
+    const delay = 5000 * this.reconnectAttempts;
+    logger.warn(`[ ${this.credits} ] Reconnecting in ${delay/1000}s...`);
+    setTimeout(() => this.loadAndLogin().catch(() => this.scheduleReconnect()), delay);
   }
 
+  keepAlive() {
+    const stop = (sig) => {
+      logger.info(`[ ${this.credits} ] ${sig} Received. Powering down...`);
+      process.exit(0);
+    };
+    process.on('SIGINT', () => stop('SIGINT'));
+    process.on('SIGTERM', () => stop('SIGTERM'));
+  }
+
+  _sleep(ms) {
+    return new Promise(res => setTimeout(res, ms));
+  }
 }
 
-/*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📦 EXPORT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*/
 module.exports = InstagramBot;
+          
