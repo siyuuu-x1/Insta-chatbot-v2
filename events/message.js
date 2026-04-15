@@ -18,171 +18,204 @@ module.exports = {
       const event = data;
 
       // Ignore messages from self
-      if (event.senderID === bot.userID) {
-        return;
+      if (event.senderID === bot.userID) return;
+
+      // Anti-inbox: ignore DM threads (non-group) when enabled
+      if (config.ANTI_INBOX && !event.isGroup) return;
+
+      // Log event filter
+      if (config.LOG_EVENTS.disableAll || !config.LOG_EVENTS.message) {
+        // skip banner log
+      } else {
+        Banner.messageReceived(event.senderID, event.body || '');
       }
 
       // Track user activity
       const user = database.getUser(event.senderID);
-      user.messageCount++;
+      user.messageCount = (user.messageCount || 0) + 1;
       database.updateUser(event.senderID, user);
 
-      // Moderation checks
-      const moderationResult = await moderation.moderateMessage(event.senderID, event.body);
-      if (!moderationResult.allowed) {
-        logger.info(`Message blocked from ${event.senderID}: ${moderationResult.reason}`);
-        if (moderationResult.message && moderationResult.reason !== 'whitelist') {
-          await api.sendMessage(moderationResult.message, event.threadId);
+      // Moderation: whitelist + ban check
+      const modResult = await moderation.moderateMessage(
+        event.senderID,
+        event.threadId,
+        event.body
+      );
+      if (!modResult.allowed) {
+        logger.info(`Message blocked from ${event.senderID}: ${modResult.reason}`);
+        if (modResult.message) {
+          await api.sendMessage(modResult.message, event.threadId);
         }
         return;
       }
 
-      // Send welcome message to new users
-      if (config.WELCOME_MESSAGE_ENABLED && !database.hasBeenWelcomed(event.senderID)) {
-        await api.sendMessage(config.WELCOME_MESSAGE, event.threadId);
-        database.markAsWelcomed(event.senderID);
-        logger.info(`Sent welcome message to user ${event.senderID}`);
-      }
+      // Skip non-text messages
+      if (!event.body || typeof event.body !== 'string') return;
 
-      // Log message only in debug mode
-      Banner.messageReceived(event.senderID, event.body || '');
-
-      // Ensure event.body is a string
-      if (!event.body || typeof event.body !== 'string') {
-        return; // Skip non-text messages
-      }
-
-      // Check for auto-responses (before command check)
+      // Auto-responses (before command parsing)
       const autoResponse = database.findAutoResponse(event.body);
       if (autoResponse) {
         await api.sendMessage(autoResponse.response, event.threadId);
         return;
       }
 
-      // Get thread-specific prefix or use global prefix
+      // Determine effective prefix
       const threadData = database.getThreadData(event.threadId);
       const prefix = threadData?.prefix || config.PREFIX;
 
-      // Handle "prefix" command without prefix (show info only)
+      // "prefix" info shortcut
       const bodyLower = event.body.toLowerCase().trim();
-      
       if (bodyLower === 'prefix') {
-        const globalPrefix = config.PREFIX;
-        const threadPrefix = threadData?.prefix || globalPrefix;
-        
-        let message = `🌐 Global prefix: ${globalPrefix}\n🛸 Your group chat prefix: ${threadPrefix}`;
-        
-        await api.sendMessage(message, event.threadId);
+        await api.sendMessage(
+          `🌐 Global prefix: ${config.PREFIX}\n🛸 Thread prefix: ${prefix}`,
+          event.threadId
+        );
         return;
       }
 
-      // Check if message is a command
-      if (event.body.startsWith(prefix)) {
-        const args = event.body.slice(prefix.length).trim().split(/ +/);
-        const commandName = args.shift().toLowerCase();
-        
-        // Check if user typed only the prefix
-        if (!commandName) {
-          return api.sendMessage(
-            `ℹ️ You typed only the prefix!\n\n` +
-            `Current prefix: ${prefix}\n` +
-            `Type ${prefix}help to see all commands.`,
+      // Determine if message is a command
+      const startsWithPrefix = event.body.startsWith(prefix);
+      const noPrefixAllowed  = config.NO_PREFIX && PermissionManager.canUseNoPrefix(event.senderID);
+
+      if (!startsWithPrefix && !noPrefixAllowed) return;
+
+      // Parse command and args
+      let rawBody = event.body;
+      if (startsWithPrefix) {
+        rawBody = event.body.slice(prefix.length);
+      }
+      const args = rawBody.trim().split(/ +/);
+      const commandName = args.shift().toLowerCase();
+
+      if (!commandName) {
+        if (startsWithPrefix) {
+          await api.sendMessage(
+            `ℹ️ You typed only the prefix!\n\nCurrent prefix: ${prefix}\nType ${prefix}help to see all commands.`,
             event.threadId
           );
         }
-        
-        const command = commandLoader.getCommand(commandName);
-        
-        if (!command) {
-          // Find closest matching command
-          const allCommandNames = commandLoader.getAllCommandNames();
-          const closestMatch = this.findClosestCommand(commandName, allCommandNames);
-          
-          let errorMsg = `❌ Unknown command: "${commandName}"\n\n`;
-          
-          if (closestMatch && closestMatch.distance <= 3) {
-            errorMsg += `💡 Did you mean: ${prefix}${closestMatch.command}?\n\n`;
+        return;
+      }
+
+      const command = commandLoader.getCommand(commandName);
+
+      // Command not found
+      if (!command) {
+        // Only notify when the user explicitly typed the prefix — never for no-prefix messages
+        if (startsWithPrefix && !config.HIDE_NOTI.commandNotFound) {
+          const allNames = commandLoader.getAllCommandNames();
+          const closest  = this.findClosestCommand(commandName, allNames);
+          let msg = `❌ Unknown command: "${commandName}"\n\n`;
+          if (closest && closest.distance <= 3) {
+            msg += `💡 Did you mean: ${prefix}${closest.command}?\n\n`;
           }
-          
-          errorMsg += `Type ${prefix}help to see all available commands.`;
-          
-          return api.sendMessage(errorMsg, event.threadId);
+          msg += `Type ${prefix}help to see all available commands.`;
+          await api.sendMessage(msg, event.threadId);
         }
+        return;
+      }
 
-        // Check cooldown
-        const cooldownTime = (command.config.cooldown || 0) * 1000;
-        const remainingCooldown = commandLoader.checkCooldown(
-          event.senderID,
-          command.config.name,
-          cooldownTime
+      // Admin-only mode check
+      if (config.ADMIN_ONLY_ENABLE) {
+        const ignored = config.ADMIN_ONLY_IGNORE_COMMANDS.map(n => n.toLowerCase());
+        if (!ignored.includes(commandName)) {
+          const userRole = PermissionManager.getUserRole(event.senderID);
+          if (userRole < 2) {
+            if (!config.HIDE_NOTI.adminOnly) {
+              await api.sendMessage(
+                '🔒 The bot is currently in admin-only mode.',
+                event.threadId
+              );
+            }
+            return;
+          }
+        }
+      }
+
+      // Cooldown check
+      const cooldownTime = (command.config.cooldown || 0) * 1000;
+      const remaining    = commandLoader.checkCooldown(event.senderID, command.config.name, cooldownTime);
+      if (remaining > 0) {
+        await api.sendMessage(
+          `⏰ Please wait ${remaining}s before using this command again.`,
+          event.threadId
         );
+        return;
+      }
 
-        if (remainingCooldown > 0) {
-          return api.sendMessage(
-            `⏰ Please wait ${remainingCooldown}s before using this command again.`,
-            event.threadId
-          );
+      // Command spam protection
+      const spamCheck = moderation.checkCommandSpam(event.senderID);
+      if (spamCheck.isSpam) {
+        const banHours = config.SPAM_BAN_DURATION;
+        database.banUser(String(event.senderID), banHours * 3600 * 1000);
+        moderation.resetSpam(event.senderID);
+        if (spamCheck.message) {
+          await api.sendMessage(spamCheck.message, event.threadId);
         }
+        return;
+      }
 
-        // Check permissions
-        const requiredRole = command.config.role || 0;
-        const hasPermission = await PermissionManager.hasPermission(event.senderID, requiredRole);
-
-        if (!hasPermission) {
+      // Permission check — fetch threadInfo for role-1 (group admin) checks
+      const requiredRole = command.config.role || 0;
+      let threadInfo = null;
+      if (requiredRole === 1) {
+        threadInfo = await bot.getThreadInfo(event.threadId).catch(() => null);
+      }
+      const hasPermission = await PermissionManager.hasPermission(event.senderID, requiredRole, threadInfo);
+      if (!hasPermission) {
+        if (!config.HIDE_NOTI.needRoleToUseCmd) {
           const roleName = PermissionManager.getRoleName(requiredRole);
-          return api.sendMessage(
+          await api.sendMessage(
             `❌ Access Denied!\n\nThis command requires: ${roleName}\nYour role is not sufficient.`,
             event.threadId
           );
         }
+        return;
+      }
 
-        // Execute command
-        try {
-          Banner.commandExecuted(command.config.name, event.senderID, true);
+      // Execute command
+      try {
+        Banner.commandExecuted(command.config.name, event.senderID, true);
+        user.commandCount = (user.commandCount || 0) + 1;
+        database.updateUser(event.senderID, user);
+        database.incrementStat('totalCommands');
 
-          // Show typing indicator if enabled
-          if (config.TYPING_INDICATOR && bot.ig.dm && typeof bot.ig.dm.indicateActivity === 'function') {
-            try {
-              await bot.ig.dm.indicateActivity(event.threadId);
-            } catch (typingError) {
-              logger.debug('Could not send typing indicator', { error: typingError.message });
+        // Wrap api so sendMessage automatically replies to the triggering message
+        const replyApi = new Proxy(api, {
+          get(target, prop) {
+            if (prop === 'sendMessage') {
+              return async (text, threadID) => {
+                try {
+                  return await target.replyToMessage(threadID, text, event.messageID);
+                } catch (_) {
+                  return await target.sendMessage(text, threadID);
+                }
+              };
             }
+            return target[prop];
           }
+        });
 
-          // Track command usage
-          user.commandCount++;
-          database.updateUser(event.senderID, user);
-          database.incrementStat('totalCommands');
+        await command.run({
+          api: replyApi,
+          event,
+          args,
+          bot,
+          commandName: command.config.name,
+          logger,
+          database,
+          config,
+          PermissionManager,
+          ConfigManager
+        });
 
-          await command.run({
-            api,
-            event,
-            args,
-            bot,
-            commandName: command.config.name,
-            logger,
-            database,
-            config,
-            PermissionManager,
-            ConfigManager
-          });
-
-          // Set cooldown
-          if (cooldownTime > 0) {
-            commandLoader.setCooldown(event.senderID, command.config.name, cooldownTime);
-          }
-        } catch (error) {
-          logger.error(`Command error: ${command.config.name}`, {
-            error: error.message
-          });
-          
-          Banner.commandExecuted(command.config.name, event.senderID, false);
-          
-          api.sendMessage(
-            `❌ Error executing command: ${error.message}`,
-            event.threadId
-          );
+        if (cooldownTime > 0) {
+          commandLoader.setCooldown(event.senderID, command.config.name, cooldownTime);
         }
+      } catch (error) {
+        logger.error(`Command error: ${command.config.name}`, { error: error.message });
+        Banner.commandExecuted(command.config.name, event.senderID, false);
+        await api.sendMessage(`❌ Error executing command: ${error.message}`, event.threadId);
       }
     } catch (error) {
       logger.error('Error in message event handler', {
@@ -192,55 +225,27 @@ module.exports = {
     }
   },
 
-  /**
-   * Find closest matching command using Levenshtein distance
-   */
   findClosestCommand(input, commandList) {
-    let closestCommand = null;
-    let minDistance = Infinity;
-
+    let closest = null;
+    let minDist = Infinity;
     for (const cmd of commandList) {
-      const distance = this.levenshteinDistance(input.toLowerCase(), cmd.toLowerCase());
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestCommand = cmd;
-      }
+      const d = this.levenshtein(input.toLowerCase(), cmd.toLowerCase());
+      if (d < minDist) { minDist = d; closest = cmd; }
     }
-
-    return closestCommand ? { command: closestCommand, distance: minDistance } : null;
+    return closest ? { command: closest, distance: minDist } : null;
   },
 
-  /**
-   * Calculate Levenshtein distance between two strings
-   */
-  levenshteinDistance(str1, str2) {
-    const len1 = str1.length;
-    const len2 = str2.length;
-    const matrix = [];
-
-    // Initialize matrix
-    for (let i = 0; i <= len1; i++) {
-      matrix[i] = [i];
-    }
-    for (let j = 0; j <= len2; j++) {
-      matrix[0][j] = j;
-    }
-
-    // Fill matrix
-    for (let i = 1; i <= len1; i++) {
-      for (let j = 1; j <= len2; j++) {
-        if (str1[i - 1] === str2[j - 1]) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j - 1] + 1, // substitution
-            matrix[i][j - 1] + 1,     // insertion
-            matrix[i - 1][j] + 1      // deletion
-          );
-        }
+  levenshtein(a, b) {
+    const m = [], la = a.length, lb = b.length;
+    for (let i = 0; i <= la; i++) m[i] = [i];
+    for (let j = 0; j <= lb; j++) m[0][j] = j;
+    for (let i = 1; i <= la; i++) {
+      for (let j = 1; j <= lb; j++) {
+        m[i][j] = a[i-1] === b[j-1]
+          ? m[i-1][j-1]
+          : Math.min(m[i-1][j-1] + 1, m[i][j-1] + 1, m[i-1][j] + 1);
       }
     }
-
-    return matrix[len1][len2];
+    return m[la][lb];
   }
 };
