@@ -3,140 +3,124 @@ const path = require('path');
 const logger = require('./logger');
 
 class ConfigManager {
-  static configPath = './config.json';
+  static configPath = path.resolve(__dirname, '../config/default.json');
 
-  /**
-   * Load config.json
-   * @returns {Object} Configuration object
-   */
   static loadConfig() {
     try {
       if (fs.existsSync(this.configPath)) {
-        const configData = fs.readFileSync(this.configPath, 'utf-8');
-        return JSON.parse(configData);
+        return JSON.parse(fs.readFileSync(this.configPath, 'utf-8'));
       }
       return {};
     } catch (error) {
-      logger.error('Error loading config.json:', { error: error.message });
+      logger.error('Error loading config/default.json:', { error: error.message });
       return {};
     }
   }
 
-  /**
-   * Save config.json
-   * @param {Object} config - Configuration object to save
-   * @returns {boolean} Success status
-   */
   static saveConfig(config) {
     try {
-      const configData = JSON.stringify(config, null, 2);
-      fs.writeFileSync(this.configPath, configData, 'utf-8');
+      fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2), 'utf-8');
       logger.info('Configuration saved successfully');
       return true;
     } catch (error) {
-      logger.error('Error saving config.json:', { error: error.message });
+      logger.error('Error saving config/default.json:', { error: error.message });
       return false;
     }
   }
 
-  /**
-   * Add admin to config
-   * @param {string} userId - User ID to add as admin
-   * @returns {boolean} Success status
-   */
-  static addAdmin(userId) {
-    try {
-      const config = this.loadConfig();
-      
-      if (!config.permissions) {
-        config.permissions = { admins: [] };
-      }
-      
-      if (!config.permissions.admins) {
-        config.permissions.admins = [];
-      }
-
-      // Check if already admin
-      if (config.permissions.admins.includes(userId)) {
-        return false; // Already admin
-      }
-
-      config.permissions.admins.push(userId);
-      return this.saveConfig(config);
-    } catch (error) {
-      logger.error('Error adding admin:', { error: error.message, userId });
-      return false;
-    }
-  }
-
-  /**
-   * Remove admin from config
-   * @param {string} userId - User ID to remove from admins
-   * @returns {boolean} Success status
-   */
-  static removeAdmin(userId) {
-    try {
-      const config = this.loadConfig();
-      
-      if (!config.permissions || !config.permissions.admins) {
-        return false;
-      }
-
-      // Check if user is admin
-      const index = config.permissions.admins.indexOf(userId);
-      if (index === -1) {
-        return false; // Not an admin
-      }
-
-      // Don't allow removing developer
-      if (userId === config.permissions.developer) {
-        return false; // Cannot remove developer
-      }
-
-      config.permissions.admins.splice(index, 1);
-      return this.saveConfig(config);
-    } catch (error) {
-      logger.error('Error removing admin:', { error: error.message, userId });
-      return false;
-    }
-  }
-
-  /**
-   * Get list of admins
-   * @returns {Array} Array of admin user IDs
-   */
+  // ── Admins (role 2) ──────────────────────────────────────────────────
   static getAdmins() {
     try {
-      const config = this.loadConfig();
-      return config.permissions?.admins || [];
+      return this.loadConfig().adminBot || [];
     } catch (error) {
       logger.error('Error getting admins:', { error: error.message });
       return [];
     }
   }
 
-  /**
-   * Check if user is admin
-   * @param {string} userId - User ID to check
-   * @returns {boolean} True if user is admin
-   */
   static isAdmin(userId) {
-    const admins = this.getAdmins();
-    return admins.includes(userId);
+    return this.getAdmins().includes(String(userId));
   }
 
-  /**
-   * Get developer ID
-   * @returns {string} Developer user ID
-   */
-  static getDeveloper() {
+  static addAdmin(userId) {
     try {
       const config = this.loadConfig();
-      return config.permissions?.developer || '';
+      if (!config.adminBot) config.adminBot = [];
+      if (config.adminBot.includes(String(userId))) return false;
+      config.adminBot.push(String(userId));
+      return this.saveConfig(config);
     } catch (error) {
-      logger.error('Error getting developer:', { error: error.message });
-      return '';
+      logger.error('Error adding admin:', { error: error.message });
+      return false;
     }
+  }
+
+  static removeAdmin(userId) {
+    try {
+      const config = this.loadConfig();
+      if (!config.adminBot) return false;
+      const idx = config.adminBot.indexOf(String(userId));
+      if (idx === -1) return false;
+      if (config.devUsers && config.devUsers.includes(String(userId))) return false;
+      config.adminBot.splice(idx, 1);
+      return this.saveConfig(config);
+    } catch (error) {
+      logger.error('Error removing admin:', { error: error.message });
+      return false;
+    }
+  }
+
+  // ── Premium users (role 3) ───────────────────────────────────────────
+  static getPremiumUsers() {
+    try {
+      return this.loadConfig().premiumUsers || [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  static addPremiumUser(userId) {
+    try {
+      const config = this.loadConfig();
+      if (!config.premiumUsers) config.premiumUsers = [];
+      if (config.premiumUsers.includes(String(userId))) return false;
+      config.premiumUsers.push(String(userId));
+      return this.saveConfig(config);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  static removePremiumUser(userId) {
+    try {
+      const config = this.loadConfig();
+      if (!config.premiumUsers) return false;
+      const idx = config.premiumUsers.indexOf(String(userId));
+      if (idx === -1) return false;
+      config.premiumUsers.splice(idx, 1);
+      return this.saveConfig(config);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // ── Developers (role 4) ──────────────────────────────────────────────
+  static getDevUsers() {
+    try {
+      return this.loadConfig().devUsers || [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  static isDev(userId) {
+    return this.getDevUsers().includes(String(userId));
+  }
+
+  // Legacy shim – some old code calls getDeveloper()
+  static getDeveloper() {
+    const devs = this.getDevUsers();
+    return devs[0] || '';
   }
 }
 

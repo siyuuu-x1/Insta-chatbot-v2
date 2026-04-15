@@ -46,7 +46,7 @@ const cleanConsoleFormat = winston.format.printf(({ level, message, type, ...met
   const color = colors[type] || colors[level] || colors.info;
   
   // Format: [TIME] ● LEVEL | Message
-  let output = `${colors.reset}[${timestamp}] ${color}${icon} ${levelName.padEnd(5)}${colors.reset} │ ${message}`;
+  let output = `${colors.reset}[${timestamp}] ${color}${icon} ${levelName.padEnd(5)}${colors.reset}  ${message}`;
   
   // Only show metadata if it exists and is not just 'service'
   const filteredMetadata = { ...metadata };

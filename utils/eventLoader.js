@@ -13,7 +13,7 @@ class EventLoader {
    * Load all events from events directory
    */
   async loadEvents() {
-    const eventsPath = path.resolve(__dirname, '..', config.EVENTS_PATH);
+    const eventsPath = path.resolve(config.EVENTS_PATH);
     
     if (!fs.existsSync(eventsPath)) {
       logger.warn('Events directory not found, creating it');

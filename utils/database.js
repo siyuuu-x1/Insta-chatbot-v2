@@ -1,12 +1,23 @@
 const fs = require('fs');
 const path = require('path');
+const initSqlJs = require('sql.js');
+const { MongoClient } = require('mongodb');
 const logger = require('./logger');
 const config = require('../config');
 
 class Database {
   constructor() {
-    this.dbPath = path.resolve(config.DATA_PATH, 'database.json');
-    this.data = {
+    this.data = this.createDefaultData();
+    this.dbPath = path.resolve(config.DATABASE_PATH);
+    this.sqlite = null;
+    this.mongoClient = null;
+    this.mongoCollection = null;
+    this.storeType = 'sqlite';
+    this.ready = this.init();
+  }
+
+  createDefaultData() {
+    return {
       users: {},
       threads: {},
       stats: {},
@@ -20,11 +31,49 @@ class Database {
       sentMessages: {},
       processedMessages: {}
     };
-    this.ensureDataDirectory();
-    this.load();
-    
-    if (config.DATABASE_AUTO_SAVE) {
-      this.startAutoSave();
+  }
+
+  normalizeData(parsed = {}) {
+    return {
+      users: parsed.users || {},
+      threads: parsed.threads || {},
+      stats: parsed.stats || {},
+      economy: parsed.economy || {},
+      reminders: parsed.reminders || [],
+      autoResponses: parsed.autoResponses || [],
+      welcomedUsers: new Set(parsed.welcomedUsers || []),
+      bannedUsers: new Set(parsed.bannedUsers || []),
+      spamWarnings: parsed.spamWarnings || {},
+      lastMessages: parsed.lastMessages || {},
+      sentMessages: parsed.sentMessages || {},
+      processedMessages: parsed.processedMessages || {}
+    };
+  }
+
+  serializeData() {
+    return {
+      ...this.data,
+      welcomedUsers: Array.from(this.data.welcomedUsers),
+      bannedUsers: Array.from(this.data.bannedUsers)
+    };
+  }
+
+  async init() {
+    try {
+      this.ensureDataDirectory();
+
+      if (config.MONGODB_URI) {
+        await this.initMongoDB();
+      } else {
+        await this.initSQLite();
+      }
+
+      if (config.DATABASE_AUTO_SAVE) {
+        this.startAutoSave();
+      }
+    } catch (error) {
+      logger.error('Failed to initialize database', { error: error.message, stack: error.stack });
+      this.data = this.createDefaultData();
     }
   }
 
@@ -35,74 +84,130 @@ class Database {
     }
   }
 
-  load() {
-    try {
-      if (fs.existsSync(this.dbPath)) {
-        const rawData = fs.readFileSync(this.dbPath, 'utf-8');
-        const parsed = JSON.parse(rawData);
-        
-        this.data = {
-          users: parsed.users || {},
-          threads: parsed.threads || {},
-          stats: parsed.stats || {},
-          economy: parsed.economy || {},
-          reminders: parsed.reminders || [],
-          autoResponses: parsed.autoResponses || [],
-          welcomedUsers: new Set(parsed.welcomedUsers || []),
-          bannedUsers: new Set(parsed.bannedUsers || []),
-          spamWarnings: parsed.spamWarnings || {},
-          lastMessages: parsed.lastMessages || {},
-          sentMessages: parsed.sentMessages || {},
-          processedMessages: parsed.processedMessages || {}
-        };
-        
-        logger.info('Database loaded successfully');
-      } else {
-        this.save();
-        logger.info('Created new database');
-      }
-    } catch (error) {
-      logger.error('Failed to load database', { error: error.message });
-      this.data = {
-        users: {},
-        threads: {},
-        stats: {},
-        economy: {},
-        reminders: [],
-        autoResponses: [],
-        welcomedUsers: new Set(),
-        bannedUsers: new Set(),
-        spamWarnings: {},
-        lastMessages: {},
-        sentMessages: {},
-        processedMessages: {}
-      };
+  async initSQLite() {
+    this.storeType = 'sqlite';
+    const SQL = await initSqlJs({
+      locateFile: file => require.resolve(`sql.js/dist/${file}`)
+    });
+
+    if (fs.existsSync(this.dbPath)) {
+      const fileBuffer = fs.readFileSync(this.dbPath);
+      this.sqlite = new SQL.Database(fileBuffer);
+    } else {
+      this.sqlite = new SQL.Database();
+    }
+
+    this.sqlite.run('CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    const rows = this.sqlite.exec("SELECT value FROM bot_state WHERE key = 'data' LIMIT 1");
+
+    if (rows.length > 0 && rows[0].values.length > 0) {
+      this.data = this.normalizeData(JSON.parse(rows[0].values[0][0]));
+      logger.info('SQLite database loaded successfully');
+      return;
+    }
+
+    const legacyData = this.loadLegacyJsonData();
+    if (legacyData) {
+      this.data = this.normalizeData(legacyData);
+      this.save();
+      this.removeLegacyJsonData();
+      logger.info('Migrated JSON data to SQLite database');
+    } else {
+      this.save();
+      logger.info('Created new SQLite database');
     }
   }
 
-  save() {
-    try {
-      const dataToSave = {
-        ...this.data,
-        welcomedUsers: Array.from(this.data.welcomedUsers),
-        bannedUsers: Array.from(this.data.bannedUsers)
-      };
-      
-      fs.writeFileSync(this.dbPath, JSON.stringify(dataToSave, null, 2), 'utf-8');
-      logger.debug('Database saved successfully');
-    } catch (error) {
-      logger.error('Failed to save database', { error: error.message });
+  async initMongoDB() {
+    this.storeType = 'mongodb';
+    this.mongoClient = new MongoClient(config.MONGODB_URI);
+    await this.mongoClient.connect();
+
+    const databaseName = config.MONGODB_DATABASE;
+    this.mongoCollection = this.mongoClient.db(databaseName).collection('bot_state');
+
+    const state = await this.mongoCollection.findOne({ _id: 'data' });
+    if (state?.data) {
+      this.data = this.normalizeData(state.data);
+      logger.info('MongoDB database loaded successfully');
+      return;
     }
+
+    const legacyData = this.loadLegacyJsonData();
+    if (legacyData) {
+      this.data = this.normalizeData(legacyData);
+      await this.saveMongoDB();
+      this.removeLegacyJsonData();
+      logger.info('Migrated JSON data to MongoDB database');
+    } else {
+      await this.saveMongoDB();
+      logger.info('Created new MongoDB database state');
+    }
+  }
+
+  loadLegacyJsonData() {
+    const legacyPath = path.resolve(config.DATA_PATH, 'database.json');
+    if (!fs.existsSync(legacyPath)) return null;
+
+    try {
+      return JSON.parse(fs.readFileSync(legacyPath, 'utf-8'));
+    } catch (error) {
+      logger.error('Failed to read legacy JSON database', { error: error.message });
+      return null;
+    }
+  }
+
+  removeLegacyJsonData() {
+    const legacyPath = path.resolve(config.DATA_PATH, 'database.json');
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+    } catch (error) {
+      logger.warn('Could not remove legacy JSON database after migration', { error: error.message });
+    }
+  }
+
+  load() {
+    return this.ready;
+  }
+
+  save() {
+    if (this.storeType === 'mongodb') {
+      this.saveMongoDB().catch(error => {
+        logger.error('Failed to save MongoDB database', { error: error.message });
+      });
+      return;
+    }
+
+    if (!this.sqlite) return;
+
+    try {
+      const serialized = JSON.stringify(this.serializeData());
+      this.sqlite.run('INSERT OR REPLACE INTO bot_state (key, value, updated_at) VALUES (?, ?, ?)', ['data', serialized, Date.now()]);
+      const exported = this.sqlite.export();
+      fs.writeFileSync(this.dbPath, Buffer.from(exported));
+      logger.debug('SQLite database saved successfully');
+    } catch (error) {
+      logger.error('Failed to save SQLite database', { error: error.message });
+    }
+  }
+
+  async saveMongoDB() {
+    if (!this.mongoCollection) return;
+
+    await this.mongoCollection.updateOne(
+      { _id: 'data' },
+      { $set: { data: this.serializeData(), updatedAt: new Date() } },
+      { upsert: true }
+    );
   }
 
   startAutoSave() {
     setInterval(() => {
       this.save();
     }, config.DATABASE_SAVE_INTERVAL || 60000);
-    logger.info('Auto-save enabled');
+    logger.info(`Auto-save enabled (${this.storeType})`);
   }
 
-  // User methods
   getUser(userId) {
     if (!this.data.users[userId]) {
       this.data.users[userId] = {
@@ -123,7 +228,6 @@ class Database {
     return user;
   }
 
-  // Economy methods
   getBalance(userId) {
     if (!this.data.economy[userId]) {
       this.data.economy[userId] = {
@@ -143,7 +247,6 @@ class Database {
     return economy.balance;
   }
 
-  // Stats methods
   incrementStat(key) {
     if (!this.data.stats[key]) {
       this.data.stats[key] = 0;
@@ -155,7 +258,6 @@ class Database {
     return this.data.stats[key] || 0;
   }
 
-  // Welcome tracking
   hasBeenWelcomed(userId) {
     return this.data.welcomedUsers.has(userId);
   }
@@ -164,7 +266,6 @@ class Database {
     this.data.welcomedUsers.add(userId);
   }
 
-  // Ban management
   isBanned(userId) {
     return this.data.bannedUsers.has(userId);
   }
@@ -179,21 +280,20 @@ class Database {
     logger.info(`User ${userId} has been unbanned`);
   }
 
-  // Spam tracking
   trackMessage(userId) {
     const now = Date.now();
-    
+
     if (!this.data.lastMessages[userId]) {
       this.data.lastMessages[userId] = [];
     }
-    
+
     this.data.lastMessages[userId].push(now);
-    
+
     const oneMinuteAgo = now - 60000;
     this.data.lastMessages[userId] = this.data.lastMessages[userId].filter(
       timestamp => timestamp > oneMinuteAgo
     );
-    
+
     return this.data.lastMessages[userId].length;
   }
 
@@ -225,7 +325,6 @@ class Database {
     return this.data.spamWarnings[userId] || { count: 0, lastWarning: 0 };
   }
 
-  // Auto-responses
   addAutoResponse(trigger, response, createdBy) {
     const autoResponse = {
       id: Date.now().toString(),
@@ -252,12 +351,11 @@ class Database {
   }
 
   findAutoResponse(message) {
-    return this.data.autoResponses.find(ar => 
+    return this.data.autoResponses.find(ar =>
       message.toLowerCase().includes(ar.trigger.toLowerCase())
     );
   }
 
-  // Reminders
   addReminder(userId, message, triggerTime) {
     const reminder = {
       id: Date.now().toString(),
@@ -284,7 +382,6 @@ class Database {
     return false;
   }
 
-  // Utility methods
   getAllUsers() {
     return Object.values(this.data.users);
   }
@@ -295,7 +392,7 @@ class Database {
 
   clearOldData() {
     const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-    
+
     Object.keys(this.data.lastMessages).forEach(userId => {
       const recentMessages = this.data.lastMessages[userId].filter(
         timestamp => timestamp > thirtyDaysAgo
@@ -306,11 +403,10 @@ class Database {
         this.data.lastMessages[userId] = recentMessages;
       }
     });
-    
+
     logger.info('Cleared old data from database');
   }
 
-  // Thread methods
   getThreadData(threadId) {
     if (!this.data.threads[threadId]) {
       this.data.threads[threadId] = {
@@ -338,22 +434,20 @@ class Database {
     return false;
   }
 
-  // Sent message tracking (for unsend functionality)
   storeSentMessage(threadId, itemId) {
     if (!this.data.sentMessages[threadId]) {
       this.data.sentMessages[threadId] = [];
     }
-    
+
     this.data.sentMessages[threadId].push({
       itemId: itemId,
       timestamp: Date.now()
     });
-    
-    // Keep only last 50 messages per thread
+
     if (this.data.sentMessages[threadId].length > 50) {
       this.data.sentMessages[threadId].shift();
     }
-    
+
     logger.debug('Stored sent message', { threadId, itemId });
   }
 
@@ -361,10 +455,10 @@ class Database {
     if (!this.data.sentMessages[threadId] || this.data.sentMessages[threadId].length === 0) {
       return null;
     }
-    
+
     const messages = this.data.sentMessages[threadId];
     const lastMessage = messages[messages.length - 1];
-    
+
     return {
       itemId: lastMessage.itemId,
       threadId: threadId,
@@ -376,14 +470,14 @@ class Database {
     if (!this.data.sentMessages[threadId]) {
       return false;
     }
-    
+
     const index = this.data.sentMessages[threadId].findIndex(msg => msg.itemId === itemId);
     if (index > -1) {
       this.data.sentMessages[threadId].splice(index, 1);
       logger.debug('Removed sent message from storage', { threadId, itemId });
       return true;
     }
-    
+
     return false;
   }
 
@@ -393,46 +487,42 @@ class Database {
 
   clearOldSentMessages() {
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    
+
     Object.keys(this.data.sentMessages).forEach(threadId => {
       this.data.sentMessages[threadId] = this.data.sentMessages[threadId].filter(
         msg => msg.timestamp > sevenDaysAgo
       );
-      
+
       if (this.data.sentMessages[threadId].length === 0) {
         delete this.data.sentMessages[threadId];
       }
     });
-    
+
     logger.debug('Cleared old sent messages');
   }
 
-  // Processed message tracking (prevents duplicate processing after restart)
   isMessageProcessed(messageId) {
     return this.data.processedMessages[messageId] !== undefined;
   }
 
   markMessageAsProcessed(messageId) {
     this.data.processedMessages[messageId] = Date.now();
-    
-    // Keep only recent processed messages (last 5 minutes) to prevent memory bloat
     this.cleanupProcessedMessages();
   }
 
   cleanupProcessedMessages() {
     const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
     const messageIds = Object.keys(this.data.processedMessages);
-    
-    // Only cleanup if we have more than 1000 processed messages
+
     if (messageIds.length > 1000) {
       messageIds.forEach(msgId => {
         if (this.data.processedMessages[msgId] < fiveMinutesAgo) {
           delete this.data.processedMessages[msgId];
         }
       });
-      
-      logger.debug('Cleaned up old processed messages', { 
-        remaining: Object.keys(this.data.processedMessages).length 
+
+      logger.debug('Cleaned up old processed messages', {
+        remaining: Object.keys(this.data.processedMessages).length
       });
     }
   }

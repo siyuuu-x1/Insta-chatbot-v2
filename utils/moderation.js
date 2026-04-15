@@ -2,129 +2,112 @@ const config = require('../config');
 const logger = require('./logger');
 const database = require('./database');
 
+// Per-user command spam tracking: userId -> { count, windowStart }
+const spamMap = new Map();
+
 class ModerationManager {
-  checkWhitelist(userId) {
-    if (!config.WHITELIST_ENABLED) {
-      return true;
-    }
-    
-    const userIdStr = String(userId);
-    return config.WHITELIST_USERS.includes(userIdStr);
+  // ── Whitelist checks ──────────────────────────────────────────────────
+
+  checkUserWhitelist(userId) {
+    if (!config.WHITELIST_ENABLE) return true;
+    return config.WHITELIST_IDS.includes(String(userId));
   }
 
-  checkBlacklist(userId) {
-    if (!config.BLACKLIST_ENABLED) {
-      return false;
-    }
-    
-    const userIdStr = String(userId);
-    return config.BLACKLIST_USERS.includes(userIdStr) || database.isBanned(userIdStr);
+  checkThreadWhitelist(threadId) {
+    if (!config.WHITELIST_THREAD_ENABLE) return true;
+    return config.WHITELIST_THREAD_IDS.includes(String(threadId));
   }
 
-  checkSpam(userId) {
-    if (!config.ANTI_SPAM_ENABLED) {
+  /**
+   * Combined whitelist check.
+   * If both are enabled, passing EITHER user OR thread whitelist is sufficient.
+   * If only one is enabled, that one must pass.
+   */
+  checkWhitelist(userId, threadId) {
+    const userEnabled   = config.WHITELIST_ENABLE;
+    const threadEnabled = config.WHITELIST_THREAD_ENABLE;
+
+    if (!userEnabled && !threadEnabled) return true;
+    if (userEnabled && threadEnabled) {
+      return this.checkUserWhitelist(userId) || this.checkThreadWhitelist(threadId);
+    }
+    if (userEnabled)   return this.checkUserWhitelist(userId);
+    if (threadEnabled) return this.checkThreadWhitelist(threadId);
+    return true;
+  }
+
+  // ── Spam protection ───────────────────────────────────────────────────
+
+  /**
+   * Checks command spam (commands per timeWindow seconds).
+   * Returns { isSpam, shouldBan, message }
+   */
+  checkCommandSpam(userId) {
+    const uid       = String(userId);
+    const threshold = config.SPAM_COMMAND_THRESHOLD;  // number of commands
+    const window    = config.SPAM_TIME_WINDOW * 1000; // seconds → ms
+    const now       = Date.now();
+
+    let entry = spamMap.get(uid);
+    if (!entry || now - entry.windowStart > window) {
+      entry = { count: 1, windowStart: now };
+      spamMap.set(uid, entry);
       return { isSpam: false };
     }
-    
-    const messageCount = database.trackMessage(userId);
-    const maxMessages = config.MAX_MESSAGES_PER_MINUTE || 10;
-    
-    if (messageCount > maxMessages) {
-      const warnings = database.addSpamWarning(userId);
-      
-      if (config.BLOCK_ON_SPAM && warnings >= 3) {
-        database.banUser(userId);
-        return {
-          isSpam: true,
-          shouldBan: true,
-          message: '🚫 You have been automatically banned for spamming.'
-        };
-      }
-      
+
+    entry.count++;
+    if (entry.count > threshold) {
       return {
         isSpam: true,
-        shouldBan: false,
-        message: config.SPAM_WARNING_MESSAGE || '⚠️ Please slow down! You\'re sending messages too quickly.'
+        shouldBan: true,
+        message: config.HIDE_NOTI.userBanned
+          ? null
+          : '🚫 You have been temporarily banned for spamming commands.'
       };
     }
-    
+
     return { isSpam: false };
   }
 
-  checkBadWords(message) {
-    if (!config.AUTO_BLOCK_ENABLED || !config.BAD_WORDS || config.BAD_WORDS.length === 0) {
-      return { hasBadWords: false };
-    }
-    
-    const lowerMessage = message.toLowerCase();
-    const foundBadWord = config.BAD_WORDS.find(word => 
-      lowerMessage.includes(word.toLowerCase())
-    );
-    
-    if (foundBadWord) {
-      return {
-        hasBadWords: true,
-        word: foundBadWord,
-        message: '⚠️ Your message contains inappropriate language.'
-      };
-    }
-    
-    return { hasBadWords: false };
+  resetSpam(userId) {
+    spamMap.delete(String(userId));
   }
 
-  async moderateMessage(userId, messageText) {
-    const userIdStr = String(userId);
-    
-    if (this.checkBlacklist(userIdStr)) {
+  // ── Main moderation gate ──────────────────────────────────────────────
+
+  async moderateMessage(userId, threadId, messageText) {
+    const uid = String(userId);
+    const tid = String(threadId);
+
+    // Banned user
+    if (database.isBanned(uid)) {
       return {
         allowed: false,
-        reason: 'blacklist',
-        message: config.BLACKLISTED || '🚫 You have been blacklisted from using this bot.'
+        reason: 'userBanned',
+        message: config.HIDE_NOTI.userBanned
+          ? null
+          : '🚫 You have been banned from using this bot.'
       };
     }
-    
-    if (!this.checkWhitelist(userIdStr)) {
+
+    // Whitelist gate
+    if (!this.checkWhitelist(uid, tid)) {
       return {
         allowed: false,
         reason: 'whitelist',
-        message: config.WHITELIST_ONLY || '⚠️ This bot is in whitelist mode. You are not authorized to use it.'
+        message: '⚠️ This bot is in whitelist mode. You are not authorized to use it.'
       };
     }
-    
-    const spamCheck = this.checkSpam(userIdStr);
-    if (spamCheck.isSpam) {
-      return {
-        allowed: false,
-        reason: 'spam',
-        message: spamCheck.message,
-        shouldBan: spamCheck.shouldBan
-      };
-    }
-    
-    if (messageText) {
-      const badWordsCheck = this.checkBadWords(messageText);
-      if (badWordsCheck.hasBadWords) {
-        if (config.BLOCK_ON_SPAM) {
-          database.banUser(userIdStr);
-        }
-        return {
-          allowed: false,
-          reason: 'bad_words',
-          message: badWordsCheck.message
-        };
-      }
-    }
-    
+
     return { allowed: true };
   }
 
   getStats() {
     return {
-      totalBans: database.data.bannedUsers.size,
-      whitelistEnabled: config.WHITELIST_ENABLED,
-      blacklistEnabled: config.BLACKLIST_ENABLED,
-      antiSpamEnabled: config.ANTI_SPAM_ENABLED,
-      badWordsCount: config.BAD_WORDS ? config.BAD_WORDS.length : 0
+      whitelistUserEnabled:   config.WHITELIST_ENABLE,
+      whitelistThreadEnabled: config.WHITELIST_THREAD_ENABLE,
+      spamThreshold:          config.SPAM_COMMAND_THRESHOLD,
+      spamTimeWindow:         config.SPAM_TIME_WINDOW
     };
   }
 }
