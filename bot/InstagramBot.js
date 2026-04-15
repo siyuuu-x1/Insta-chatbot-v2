@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * @Project: Powerful Instagram Messenger Bot
- * @Author & edited:- by siyuuu
- * @Description: Enhanced FCA-based bot with dedicated cookie login and advanced event handling.
+/* @Project: Powerful Instagram Messenger Bot
+ /* @Author & edited:- by siyuuu
+ /* @Description: Enhanced FCA-based bot with dedicated cookie login and advanced event handling.
  */
 
 const { login } = require('@neoaz07/nkxica');
