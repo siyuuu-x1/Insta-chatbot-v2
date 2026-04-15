@@ -7,26 +7,26 @@
   },
   "antiInbox": false,
   "language": "en",
-  "nickNameBot": "গেসুকে 😈",
-  "prefix": "!",
+  "nickNameBot": "Maiko [/]",
+  "prefix": "/",
   "noPrefix": true,
   "adminOnly": {
     "enable": false,
     "ignoreCommand": []
   },
   "adminBot": [
-    "52943709733"
+    "58357453622"
   ],
   "premiumUsers": [
-    "52943709733"
+    "58357453622"
   ],
   "devUsers": [
-    "52943709733"
+    "58357453622"
   ],
   "whiteListMode": {
     "enable": false,
     "whiteListIds": [
-      "52943709733"
+      "58357453622"
     ]
   },
   "whiteListModeThread": {
